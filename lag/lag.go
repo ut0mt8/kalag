@@ -4,12 +4,31 @@ import (
 	"fmt"
 	"github.com/Shopify/sarama"
 	"strings"
+	"time"
 )
 
 type OffsetStatus struct {
 	Current int64
 	End     int64
 	Lag     int64
+}
+
+func GetOffsetTimestamp(consumer sarama.Consumer, topic string, partition int32, offset int64) (time.Time, error) {
+        cp, err := consumer.ConsumePartition(topic, partition, offset)
+        if nil != err {
+                return time.Time{}, fmt.Errorf("cannot consumme partition: ", err)
+        }
+
+        select {
+        case <-time.After(500 * time.Millisecond):
+                return time.Time{}, fmt.Errorf("no message in topic")
+        case consumerError := <-cp.Errors():
+                return time.Time{}, fmt.Errorf("consumer error: ", consumerError.Err)
+        case msg := <-cp.Messages():
+                return msg.Timestamp, nil
+        }
+
+        return time.Time{}, fmt.Errorf("unknow error")
 }
 
 func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus, error) {
@@ -91,10 +110,13 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		if cur == -1 {
 			cur = 0
 		}
+                lag := end - cur
+                // get ts of end
+                // get ts of cur 
 		ofs[part] = OffsetStatus{
 			Current: cur,
 			End:     end,
-			Lag:     end - cur,
+			Lag:     lag,
 		}
 	}
 	mng.Close()
