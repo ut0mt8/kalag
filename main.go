@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/namsral/flag"
 	"github.com/ut0mt8/kalag/lag"
-        "os"
+	"os"
 )
 
 type Config struct {
@@ -22,22 +22,22 @@ func init() {
 }
 
 func main() {
-        var p int32
+	var p int32
 
 	flag.Parse()
 	if config.topic == "" || config.group == "" {
 		fmt.Printf("-topic and -group options are required\n")
-                os.Exit(1)
+		os.Exit(1)
 	}
 
 	ofs, err := lag.GetLag(config.brokers, config.topic, config.group)
 	if err != nil {
 		fmt.Printf("getLag failed : %v\n", err)
-                os.Exit(1)
+		os.Exit(1)
 	}
 
-	fmt.Printf("part\tend\tcurrent\tlag\n")
-        for p = 0; p < int32(len(ofs)); p++ {
-		fmt.Printf("%d\t%d\t%d\t%d\n", p, ofs[p].End, ofs[p].Current, ofs[p].Lag)
+	fmt.Printf("part\tend\tcurrent\tolag\ttlag\n")
+	for p = 0; p < int32(len(ofs)); p++ {
+		fmt.Printf("%d\t%d\t%d\t%d\t%v\n", p, ofs[p].End, ofs[p].Current, ofs[p].OffsetLag, ofs[p].TimeLag)
 	}
 }
