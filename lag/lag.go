@@ -97,7 +97,7 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 	}
 
 	for _, part := range parts {
-                var tlag time.Duration
+		var tlag time.Duration
 
 		end, err := client.GetOffset(topic, part, sarama.OffsetNewest)
 		if err != nil {
@@ -139,6 +139,9 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 			consumer.Close()
 
 			tlag = endTime.Sub(curTime)
+                        if tlag < 0  {
+                            tlag = 0
+                        }
 		}
 
 		ofs[part] = OffsetStatus{
