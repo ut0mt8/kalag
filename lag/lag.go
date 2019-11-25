@@ -14,12 +14,19 @@ type OffsetStatus struct {
 	TimeLag   time.Duration
 }
 
-func GetOffsetTimestamp(consumer sarama.Consumer, topic string, partition int32, offset int64) (time.Time, error) {
+func GetOffsetTimestamp(brokers []string, cfg *sarama.Config, topic string, partition int32, offset int64) (time.Time, error) {
 
-	cp, err := consumer.ConsumePartition(topic, partition, offset)
+	c, err := sarama.NewConsumer(brokers, cfg)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("cannot create consumer: %v", err)
+	}
+	defer c.Close()
+
+	cp, err := c.ConsumePartition(topic, partition, offset)
 	if nil != err {
 		return time.Time{}, fmt.Errorf("cannot consumme partition: ", err)
 	}
+	defer cp.Close()
 
 	select {
 	case <-time.After(500 * time.Millisecond):
@@ -36,14 +43,14 @@ func GetOffsetTimestamp(consumer sarama.Consumer, topic string, partition int32,
 func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus, error) {
 
 	ofs := make(map[int32]OffsetStatus)
-	kcfg := sarama.NewConfig()
-	kcfg.Version = sarama.V2_1_0_0
-	kcfg.Consumer.Return.Errors = true
-	kcfg.Consumer.Offsets.AutoCommit.Enable = false
+	cfg := sarama.NewConfig()
+	cfg.Version = sarama.V2_1_0_0
+	cfg.Consumer.Return.Errors = true
+	cfg.Consumer.Offsets.AutoCommit.Enable = false
 
 	bks := strings.Split(brokers, ",")
 
-	cadmin, err := sarama.NewClusterAdmin(bks, kcfg)
+	cadmin, err := sarama.NewClusterAdmin(bks, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot connect to broker: %v", err)
 	}
@@ -79,9 +86,10 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 	if !cfound {
 		return nil, fmt.Errorf("consumergroup %s doesn't exist", group)
 	}
+
 	cadmin.Close()
 
-	client, err := sarama.NewClient(bks, kcfg)
+	client, err := sarama.NewClient(bks, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot connect to broker: %v", err)
 	}
@@ -91,22 +99,31 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		return nil, fmt.Errorf("cannot get partitions: %v", err)
 	}
 
-	mng, err := sarama.NewOffsetManagerFromClient(group, client)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create offset manager: %v", err)
-	}
+	client.Close()
 
 	for _, part := range parts {
 		var tlag time.Duration
 
-		end, err := client.GetOffset(topic, part, sarama.OffsetNewest)
+		c, err := sarama.NewClient(bks, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("cannot connect to broker: %v", err)
+		}
+
+		end, err := c.GetOffset(topic, part, sarama.OffsetNewest)
 		if err != nil {
 			return nil, fmt.Errorf("cannot get partition offset: %v", err)
 		}
+
+		mng, err := sarama.NewOffsetManagerFromClient(group, c)
+		if err != nil {
+			return nil, fmt.Errorf("cannot create offset manager: %v", err)
+		}
+
 		pmng, err := mng.ManagePartition(topic, part)
 		if err != nil {
 			return nil, fmt.Errorf("cannot create partition manager: %v", err)
 		}
+
 		cur, _ := pmng.NextOffset()
 		if err != nil {
 			return nil, fmt.Errorf("cannot get group offset: %v", err)
@@ -114,34 +131,28 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		if cur == -1 {
 			cur = 0
 		}
+
+		mng.Close()
+		c.Close()
+
 		olag := end - cur
 
 		if olag != 0 {
-			consumer, err := sarama.NewConsumer(bks, kcfg)
-			if err != nil {
-				return nil, fmt.Errorf("cannot create consumer: %v", err)
-			}
 
-			endTime, err := GetOffsetTimestamp(consumer, topic, part, end-1)
+			endTime, err := GetOffsetTimestamp(bks, cfg, topic, part, end-1)
 			if err != nil {
 				return nil, fmt.Errorf("cannot get end time: %v", err)
 			}
-			consumer.Close()
 
-			consumer, err = sarama.NewConsumer(bks, kcfg)
-			if err != nil {
-				return nil, fmt.Errorf("cannot create consumer: %v", err)
-			}
-			curTime, err := GetOffsetTimestamp(consumer, topic, part, cur)
+			curTime, err := GetOffsetTimestamp(bks, cfg, topic, part, cur)
 			if err != nil {
 				return nil, fmt.Errorf("cannot get current time: %v", err)
 			}
-			consumer.Close()
 
 			tlag = endTime.Sub(curTime)
-                        if tlag < 0  {
-                            tlag = 0
-                        }
+			if tlag < 0 {
+				tlag = 0
+			}
 		}
 
 		ofs[part] = OffsetStatus{
@@ -151,7 +162,5 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 			TimeLag:   tlag,
 		}
 	}
-	mng.Close()
-	client.Close()
 	return ofs, nil
 }
