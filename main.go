@@ -36,8 +36,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("part\tend\tcurrent\tolag\ttlag\n")
+	fmt.Printf("part\tleader\tend\tcurrent\tolag\ttlag\n")
 	for p = 0; p < int32(len(ofs)); p++ {
-		fmt.Printf("%d\t%d\t%d\t%d\t%v\n", p, ofs[p].End, ofs[p].Current, ofs[p].OffsetLag, ofs[p].TimeLag)
+		fmt.Printf("%d\t%d\t%d\t%d\t%d\t%v\n", p, ofs[p].Leader, ofs[p].End, ofs[p].Current, ofs[p].OffsetLag, ofs[p].TimeLag)
 	}
 }

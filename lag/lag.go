@@ -8,6 +8,7 @@ import (
 )
 
 type OffsetStatus struct {
+	Leader    int32
 	Current   int64
 	End       int64
 	OffsetLag int64
@@ -38,6 +39,74 @@ func GetOffsetTimestamp(brokers []string, cfg *sarama.Config, topic string, part
 	}
 
 	return time.Time{}, fmt.Errorf("unknow error")
+}
+
+func GetLagPartition(brokers []string, cfg *sarama.Config, topic string, group string, part int32) (OffsetStatus, error) {
+	var tlag time.Duration
+
+	c, err := sarama.NewClient(brokers, cfg)
+	if err != nil {
+		return OffsetStatus{}, fmt.Errorf("cannot connect to broker: %v", err)
+	}
+
+	leader, err := c.Leader(topic, part)
+	if err != nil {
+		return OffsetStatus{}, fmt.Errorf("cannot get leader: %v", err)
+	}
+
+	mng, err := sarama.NewOffsetManagerFromClient(group, c)
+	if err != nil {
+		return OffsetStatus{}, fmt.Errorf("cannot create offset manager: %v", err)
+	}
+
+	pmng, err := mng.ManagePartition(topic, part)
+	if err != nil {
+		return OffsetStatus{}, fmt.Errorf("cannot create partition manager: %v", err)
+	}
+
+	cur, _ := pmng.NextOffset()
+	if err != nil {
+		return OffsetStatus{}, fmt.Errorf("cannot get consumergroup current offset: %v", err)
+	}
+	if cur == -1 {
+		cur = 0
+	}
+
+	end, err := c.GetOffset(topic, part, sarama.OffsetNewest)
+	if err != nil {
+		return OffsetStatus{}, fmt.Errorf("cannot get partition newest offset: %v", err)
+	}
+
+	mng.Close()
+	c.Close()
+
+	olag := end - cur
+
+	if olag != 0 {
+
+		endTime, err := GetOffsetTimestamp(brokers, cfg, topic, part, end-1)
+		if err != nil {
+			return OffsetStatus{}, fmt.Errorf("cannot get end time: %v", err)
+		}
+
+		curTime, err := GetOffsetTimestamp(brokers, cfg, topic, part, cur)
+		if err != nil {
+			return OffsetStatus{}, fmt.Errorf("cannot get current time: %v", err)
+		}
+
+		tlag = endTime.Sub(curTime)
+		if tlag < 0 {
+			tlag = 0
+		}
+	}
+
+	return OffsetStatus{
+		Leader:    leader.ID(),
+		Current:   cur,
+		End:       end,
+		OffsetLag: olag,
+		TimeLag:   tlag,
+	}, nil
 }
 
 func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus, error) {
@@ -102,65 +171,11 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 	client.Close()
 
 	for _, part := range parts {
-		var tlag time.Duration
-
-		c, err := sarama.NewClient(bks, cfg)
+		ofs[part], err = GetLagPartition(bks, cfg, topic, group, part)
 		if err != nil {
-			return nil, fmt.Errorf("cannot connect to broker: %v", err)
-		}
-
-		end, err := c.GetOffset(topic, part, sarama.OffsetNewest)
-		if err != nil {
-			return nil, fmt.Errorf("cannot get partition offset: %v", err)
-		}
-
-		mng, err := sarama.NewOffsetManagerFromClient(group, c)
-		if err != nil {
-			return nil, fmt.Errorf("cannot create offset manager: %v", err)
-		}
-
-		pmng, err := mng.ManagePartition(topic, part)
-		if err != nil {
-			return nil, fmt.Errorf("cannot create partition manager: %v", err)
-		}
-
-		cur, _ := pmng.NextOffset()
-		if err != nil {
-			return nil, fmt.Errorf("cannot get group offset: %v", err)
-		}
-		if cur == -1 {
-			cur = 0
-		}
-
-		mng.Close()
-		c.Close()
-
-		olag := end - cur
-
-		if olag != 0 {
-
-			endTime, err := GetOffsetTimestamp(bks, cfg, topic, part, end-1)
-			if err != nil {
-				return nil, fmt.Errorf("cannot get end time: %v", err)
-			}
-
-			curTime, err := GetOffsetTimestamp(bks, cfg, topic, part, cur)
-			if err != nil {
-				return nil, fmt.Errorf("cannot get current time: %v", err)
-			}
-
-			tlag = endTime.Sub(curTime)
-			if tlag < 0 {
-				tlag = 0
-			}
-		}
-
-		ofs[part] = OffsetStatus{
-			Current:   cur,
-			End:       end,
-			OffsetLag: olag,
-			TimeLag:   tlag,
+			return nil, fmt.Errorf("cannot get lag partition: %v", err)
 		}
 	}
+
 	return ofs, nil
 }
