@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/namsral/flag"
-	"github.com/ut0mt8/kalag/lag"
+	"github.com/ut0mt8/kalag/lag/v2"
 	"os"
 )
 
