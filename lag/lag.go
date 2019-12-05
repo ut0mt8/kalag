@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/Shopify/sarama"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -18,55 +17,56 @@ type OffsetStatus struct {
 
 var nullTime time.Time = time.Time{}
 
-func GetOffsetTimestamp(brokers []string, cfg *sarama.Config, topic string, partition int32, offset int64) (time.Time, error) {
+func GetGroupOffset(broker *sarama.Broker, topic string, partition int32, group string) (int64, error) {
+	request := &sarama.OffsetFetchRequest{Version: 4, ConsumerGroup: group}
+	request.AddPartition(topic, partition)
 
-	c, err := sarama.NewConsumer(brokers, cfg)
+	fr, err := broker.FetchOffset(request)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("cannot create consumer: %v", err)
-	}
-	defer c.Close()
-
-	pc, err := c.ConsumePartition(topic, partition, offset)
-	if nil != err {
-		return time.Time{}, fmt.Errorf("cannot consumme partition: ", err)
-	}
-	defer pc.AsyncClose()
-
-	select {
-	case <-time.After(1000 * time.Millisecond):
-		fmt.Printf("x %d %d timeout \n", partition, offset)
-		return nullTime, fmt.Errorf("no message in topic")
-	case consumerError := <-pc.Errors():
-		fmt.Printf("x %d %d %v \n", partition, offset, consumerError.Err)
-		return nullTime, fmt.Errorf("consumer error: ", consumerError.Err)
-	case msg := <-pc.Messages():
-		fmt.Printf("x %d %d %v \n", partition, offset, msg.Timestamp)
-		return msg.Timestamp, nil
+		return 0, fmt.Errorf("GetGroupOffset() cannot fetch offset request: %v", err)
 	}
 
-	return time.Time{}, fmt.Errorf("unknow error")
+	block := fr.GetBlock(topic, partition)
+	if block == nil {
+		return 0, fmt.Errorf("GetGroupOffset() cannot get block, partition %d", partition)
+	}
+
+	return block.Offset, nil
+}
+
+func GetTimestamp(broker *sarama.Broker, topic string, partition int32, offset int64) (time.Time, error) {
+	request := &sarama.FetchRequest{Version: 4}
+	request.AddBlock(topic, partition, offset, 1)
+
+	fr, err := broker.Fetch(request)
+	if err != nil {
+		return nullTime, fmt.Errorf("GetTimestamp() cannot fetch request: %v", err)
+	}
+
+	block := fr.GetBlock(topic, partition)
+	if block == nil || block.Records == nil {
+		return nullTime, fmt.Errorf("GetTimestamp() cannot get block block, partition %d", partition)
+	}
+
+	return block.Records.RecordBatch.MaxTimestamp, nil
 }
 
 func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus, error) {
-
-	var lock = sync.RWMutex{}
 	ofs := make(map[int32]OffsetStatus)
 
 	cfg := sarama.NewConfig()
 	cfg.Version = sarama.V2_1_0_0
-	cfg.Consumer.Return.Errors = true
-	cfg.Consumer.Offsets.AutoCommit.Enable = false
 
 	bks := strings.Split(brokers, ",")
 
 	cadmin, err := sarama.NewClusterAdmin(bks, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("cannot connect to broker: %v", err)
+		return nil, fmt.Errorf("GetLag() cannot connect to broker: %v", err)
 	}
 
 	topics, err := cadmin.ListTopics()
 	if err != nil {
-		return nil, fmt.Errorf("cannot list topics: %v", err)
+		return nil, fmt.Errorf("GetLag() cannot list topics: %v", err)
 	}
 
 	tfound := false
@@ -77,12 +77,12 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		}
 	}
 	if !tfound {
-		return nil, fmt.Errorf("topic %s doesn't exist", topic)
+		return nil, fmt.Errorf("GetLag() topic %s doesn't exist", topic)
 	}
 
 	groups, err := cadmin.ListConsumerGroups()
 	if err != nil {
-		return nil, fmt.Errorf("cannot list groups: %v", err)
+		return nil, fmt.Errorf("GetLag() cannot list groups: %v", err)
 	}
 
 	cfound := false
@@ -93,70 +93,35 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		}
 	}
 	if !cfound {
-		return nil, fmt.Errorf("consumergroup %s doesn't exist", group)
+		return nil, fmt.Errorf("GetLag() consumergroup %s doesn't exist", group)
 	}
 	cadmin.Close()
 
 	client, err := sarama.NewClient(bks, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("cannot connect to broker: %v", err)
+		return nil, fmt.Errorf("GetLag() cannot connect to broker: %v", err)
 	}
+	defer client.Close()
 
 	parts, err := client.Partitions(topic)
 	if err != nil {
-		return nil, fmt.Errorf("cannot get partitions: %v", err)
+		return nil, fmt.Errorf("GetLag() cannot get partitions: %v", err)
 	}
-	client.Close()
 
-	plof := func(bks []string, cfg *sarama.Config, topic string, part int32, group string, wg *sync.WaitGroup) error {
-
+	for _, part := range parts {
 		var tlag time.Duration
-		fmt.Printf("started part %d\n", part)
 
-		defer wg.Done()
-
-		c, err := sarama.NewClient(bks, cfg)
+		leader, err := client.Leader(topic, part)
 		if err != nil {
-			//return nil, fmt.Errorf("cannot connect to broker: %v", err)
-			fmt.Printf("cannot connect to broker: %v", err)
+			return nil, fmt.Errorf("GetLag() cannot get leader: %v", err)
+		}
+		if ok, _ := leader.Connected(); !ok {
+			leader.Open(client.Config())
 		}
 
-		leader, err := c.Leader(topic, part)
+		end, err := client.GetOffset(topic, part, sarama.OffsetNewest)
 		if err != nil {
-			//return nil, fmt.Errorf("cannot create offset manager: %v", err)
-			fmt.Printf("cannot get leader: %v", err)
-		}
-
-		mng, err := sarama.NewOffsetManagerFromClient(group, c)
-		if err != nil {
-			//return nil, fmt.Errorf("cannot create offset manager: %v", err)
-			fmt.Printf("cannot create offset manager: %v", err)
-		}
-
-		pmng, err := mng.ManagePartition(topic, part)
-		if err != nil {
-			//return nil, fmt.Errorf("cannot create partition manager: %v", err)
-			fmt.Printf("cannot create partition manager: %v", err)
-		}
-
-		cur, _ := pmng.NextOffset()
-		if err != nil {
-			//return nil, fmt.Errorf("cannot get consumergroup current offset: %v", err)
-			fmt.Printf("cannot get consumergroup current offset: %v", err)
-		}
-		if cur < 1 {
-			cur = 0
-		} else {
-			cur = cur - 1
-		}
-
-		pmng.AsyncClose()
-		mng.Close()
-
-		end, err := c.GetOffset(topic, part, sarama.OffsetNewest)
-		if err != nil {
-			//return nil, fmt.Errorf("cannot get partition newest offset: %v", err)
-			fmt.Printf("cannot get partition newest offset: %v", err)
+			return nil, fmt.Errorf("GetLag() cannot get partition last offset: %v", err)
 		}
 		if end < 1 {
 			end = 0
@@ -164,21 +129,35 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 			end = end - 1
 		}
 
-		c.Close()
+		coordinator, err := client.Coordinator(group)
+		if err != nil {
+			return nil, fmt.Errorf("GetLag() cannot get coordinator: %v", err)
+		}
+		if ok, _ := coordinator.Connected(); !ok {
+			coordinator.Open(client.Config())
+		}
+
+		cur, err := GetGroupOffset(coordinator, topic, part, group)
+		if err != nil {
+			return nil, fmt.Errorf("GetLag() cannot get group offset: %v", err)
+		}
+		if cur < 1 {
+			cur = 0
+		} else {
+			cur = cur - 1
+		}
+
 		olag := end - cur
 
 		if olag != 0 {
-
-			curTime, err := GetOffsetTimestamp(bks, cfg, topic, part, cur)
+			endTime, err := GetTimestamp(leader, topic, part, end)
 			if err != nil {
-				//return nil, fmt.Errorf("cannot get current time: %v", err)
-				fmt.Errorf("cannot get current time: %v", err)
+				return nil, fmt.Errorf("GetLag() cannot get end time: %v", err)
 			}
 
-			endTime, err := GetOffsetTimestamp(bks, cfg, topic, part, end)
+			curTime, err := GetTimestamp(leader, topic, part, cur)
 			if err != nil {
-				//return nil, fmt.Errorf("cannot get end time: %v", err)
-				fmt.Errorf("cannot get end time: %v", err)
+				return nil, fmt.Errorf("GetLag() cannot get current time: %v", err)
 			}
 
 			if curTime != nullTime && endTime != nullTime && endTime.After(curTime) {
@@ -188,7 +167,6 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 			}
 		}
 
-		lock.Lock()
 		ofs[part] = OffsetStatus{
 			Leader:    leader.ID(),
 			Current:   cur,
@@ -196,18 +174,6 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 			OffsetLag: olag,
 			TimeLag:   tlag,
 		}
-		lock.Unlock()
-
-		fmt.Printf("ended part %d\n", part)
-		return nil
 	}
-
-	var wg sync.WaitGroup
-	wg.Add(len(parts))
-	for _, part := range parts {
-		go plof(bks, cfg, topic, part, group, &wg)
-	}
-	wg.Wait()
 	return ofs, nil
 }
-
