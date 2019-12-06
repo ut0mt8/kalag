@@ -10,7 +10,7 @@ import (
 type OffsetStatus struct {
 	Leader    int32
 	Current   int64
-	End       int64
+	Latest    int64
 	OffsetLag int64
 	TimeLag   time.Duration
 }
@@ -119,14 +119,14 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 			leader.Open(client.Config())
 		}
 
-		end, err := client.GetOffset(topic, part, sarama.OffsetNewest)
+		last, err := client.GetOffset(topic, part, sarama.OffsetNewest)
 		if err != nil {
 			return nil, fmt.Errorf("GetLag() cannot get partition last offset: %v", err)
 		}
-		if end < 1 {
-			end = 0
+		if last < 1 {
+			last = 0
 		} else {
-			end = end - 1
+			last = last - 1
 		}
 
 		coordinator, err := client.Coordinator(group)
@@ -147,12 +147,12 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 			cur = cur - 1
 		}
 
-		olag := end - cur
+		olag := last - cur
 
 		if olag != 0 {
-			endTime, err := GetTimestamp(leader, topic, part, end)
+			lastTime, err := GetTimestamp(leader, topic, part, last)
 			if err != nil {
-				return nil, fmt.Errorf("GetLag() cannot get end time: %v", err)
+				return nil, fmt.Errorf("GetLag() cannot get last time: %v", err)
 			}
 
 			curTime, err := GetTimestamp(leader, topic, part, cur)
@@ -160,8 +160,8 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 				return nil, fmt.Errorf("GetLag() cannot get current time: %v", err)
 			}
 
-			if curTime != nullTime && endTime != nullTime && endTime.After(curTime) {
-				tlag = endTime.Sub(curTime)
+			if curTime != nullTime && lastTime != nullTime && lastTime.After(curTime) {
+				tlag = lastTime.Sub(curTime)
 			} else {
 				tlag = 0
 			}
@@ -170,7 +170,7 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		ofs[part] = OffsetStatus{
 			Leader:    leader.ID(),
 			Current:   cur,
-			End:       end,
+			Latest:    last,
 			OffsetLag: olag,
 			TimeLag:   tlag,
 		}

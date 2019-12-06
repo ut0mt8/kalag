@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/namsral/flag"
-	"github.com/ut0mt8/kalag/lag/v2"
+	"github.com/ut0mt8/kalag/lag"
 	"os"
 )
 
@@ -36,8 +36,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("part\tleader\tend\tcurrent\tolag\ttlag\n")
+	fmt.Printf("part\tleader\tlast\tcurrent\tolag\ttlag\n")
 	for p = 0; p < int32(len(ofs)); p++ {
-		fmt.Printf("%d\t%d\t%d\t%d\t%d\t%v\n", p, ofs[p].Leader, ofs[p].End, ofs[p].Current, ofs[p].OffsetLag, ofs[p].TimeLag)
+		fmt.Printf("%d\t%d\t%d\t%d\t%d\t%v\n", p, ofs[p].Leader, ofs[p].Latest, ofs[p].Current, ofs[p].OffsetLag, ofs[p].TimeLag)
 	}
 }
