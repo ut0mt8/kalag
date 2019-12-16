@@ -7,6 +7,29 @@ import (
 	"time"
 )
 
+type lagError struct {
+	topic     string
+	group     string
+	operation string
+	err       error
+}
+
+type lagPartitionError struct {
+	topic     string
+	group     string
+	partition int32
+	operation string
+	err       error
+}
+
+func (e *lagError) Error() string {
+	return fmt.Sprintf("getLag(topic: %s, group: %s) failed during [%s]: %v", e.topic, e.group, e.operation, e.err)
+}
+
+func (e *lagPartitionError) Error() string {
+	return fmt.Sprintf("getLag(topic: %s, group: %s, partition: %d) failed during [%s]: %v", e.topic, e.group, e.partition, e.operation, e.err)
+}
+
 type OffsetStatus struct {
 	Leader    int32
 	Current   int64
@@ -61,12 +84,12 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 
 	cadmin, err := sarama.NewClusterAdmin(bks, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("GetLag() cannot connect to broker: %v", err)
+		return nil, &lagError{topic, group, "admin-connect", err}
 	}
 
 	topics, err := cadmin.ListTopics()
 	if err != nil {
-		return nil, fmt.Errorf("GetLag() cannot list topics: %v", err)
+		return nil, &lagError{topic, group, "list-topics", err}
 	}
 
 	tfound := false
@@ -77,12 +100,12 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		}
 	}
 	if !tfound {
-		return nil, fmt.Errorf("GetLag() topic %s doesn't exist", topic)
+		return nil, &lagError{topic, group, "list-topics", fmt.Errorf("topic not found")}
 	}
 
 	groups, err := cadmin.ListConsumerGroups()
 	if err != nil {
-		return nil, fmt.Errorf("GetLag() cannot list groups: %v", err)
+		return nil, &lagError{topic, group, "list-groups", err}
 	}
 
 	cfound := false
@@ -93,19 +116,19 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		}
 	}
 	if !cfound {
-		return nil, fmt.Errorf("GetLag() consumergroup %s doesn't exist", group)
+		return nil, &lagError{topic, group, "list-groups", fmt.Errorf("group not found")}
 	}
 	cadmin.Close()
 
 	client, err := sarama.NewClient(bks, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("GetLag() cannot connect to broker: %v", err)
+		return nil, &lagError{topic, group, "client-connect", err}
 	}
 	defer client.Close()
 
 	parts, err := client.Partitions(topic)
 	if err != nil {
-		return nil, fmt.Errorf("GetLag() cannot get partitions: %v", err)
+		return nil, &lagError{topic, group, "list-partitions", err}
 	}
 
 	for _, part := range parts {
@@ -113,7 +136,7 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 
 		leader, err := client.Leader(topic, part)
 		if err != nil {
-			return nil, fmt.Errorf("GetLag() cannot get leader: %v", err)
+			return nil, &lagPartitionError{topic, group, part, "get-leader", err}
 		}
 		if ok, _ := leader.Connected(); !ok {
 			leader.Open(client.Config())
@@ -121,7 +144,7 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 
 		last, err := client.GetOffset(topic, part, sarama.OffsetNewest)
 		if err != nil {
-			return nil, fmt.Errorf("GetLag() cannot get partition last offset: %v", err)
+			return nil, &lagPartitionError{topic, group, part, "get-topic-newest-offset", err}
 		}
 		if last < 1 {
 			last = 0
@@ -131,7 +154,7 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 
 		coordinator, err := client.Coordinator(group)
 		if err != nil {
-			return nil, fmt.Errorf("GetLag() cannot get coordinator: %v", err)
+			return nil, &lagPartitionError{topic, group, part, "get-group-coordinator", err}
 		}
 		if ok, _ := coordinator.Connected(); !ok {
 			coordinator.Open(client.Config())
@@ -139,7 +162,7 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 
 		cur, err := GetGroupOffset(coordinator, topic, part, group)
 		if err != nil {
-			return nil, fmt.Errorf("GetLag() cannot get group offset: %v", err)
+			return nil, &lagPartitionError{topic, group, part, "get-group-offset", err}
 		}
 		if cur < 1 {
 			cur = 0
@@ -152,12 +175,12 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		if olag != 0 {
 			lastTime, err := GetTimestamp(leader, topic, part, last)
 			if err != nil {
-				return nil, fmt.Errorf("GetLag() cannot get last time: %v", err)
+				return nil, &lagPartitionError{topic, group, part, "get-timestamp-topic-offset", err}
 			}
 
 			curTime, err := GetTimestamp(leader, topic, part, cur)
 			if err != nil {
-				return nil, fmt.Errorf("GetLag() cannot get current time: %v", err)
+				return nil, &lagPartitionError{topic, group, part, "get-timestamp-group-offset", err}
 			}
 
 			if curTime != nullTime && lastTime != nullTime && lastTime.After(curTime) {
