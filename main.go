@@ -32,7 +32,7 @@ func main() {
 
 	ofs, err := lag.GetLag(config.brokers, config.topic, config.group)
 	if err != nil {
-		fmt.Printf("kalag failed: %v\n", err)
+		fmt.Printf("%v\n", err)
 		os.Exit(1)
 	}
 

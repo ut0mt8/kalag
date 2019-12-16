@@ -46,12 +46,12 @@ func GetGroupOffset(broker *sarama.Broker, topic string, partition int32, group 
 
 	fr, err := broker.FetchOffset(request)
 	if err != nil {
-		return 0, fmt.Errorf("GetGroupOffset() cannot fetch offset request: %v", err)
+		return 0, fmt.Errorf("cannot fetch offset request: %v", err)
 	}
 
 	block := fr.GetBlock(topic, partition)
 	if block == nil {
-		return 0, fmt.Errorf("GetGroupOffset() cannot get block, partition %d", partition)
+		return 0, fmt.Errorf("cannot get block")
 	}
 
 	return block.Offset, nil
@@ -63,12 +63,12 @@ func GetTimestamp(broker *sarama.Broker, topic string, partition int32, offset i
 
 	fr, err := broker.Fetch(request)
 	if err != nil {
-		return nullTime, fmt.Errorf("GetTimestamp() cannot fetch request: %v", err)
+		return nullTime, fmt.Errorf("cannot fetch request: %v", err)
 	}
 
 	block := fr.GetBlock(topic, partition)
 	if block == nil || block.Records == nil {
-		return nullTime, fmt.Errorf("GetTimestamp() cannot get block block, partition %d", partition)
+		return nullTime, fmt.Errorf("cannot get block")
 	}
 
 	return block.Records.RecordBatch.MaxTimestamp, nil
