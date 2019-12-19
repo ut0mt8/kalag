@@ -36,9 +36,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("part\tleader\tlast\tcurrent\toldest\tolag\ttlag\t\toldest-ts\n")
+	fmt.Printf("part\tleader\trepl\tisr\tlast\tcurrent\toldest\tolag\ttlag\t\toldest-ts\n")
 	for p = 0; p < int32(len(ofs)); p++ {
-		fmt.Printf("%d\t%d\t%d\t%d\t%d\t%d\t%v\t%v\n",
-			p, ofs[p].Leader, ofs[p].Latest, ofs[p].Current, ofs[p].Oldest, ofs[p].OffsetLag, ofs[p].TimeLag, ofs[p].TimeOldest)
+		fmt.Printf("%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%v\t%v\n",
+			p, ofs[p].Leader, ofs[p].Replicas, ofs[p].InSyncReplicas,
+			ofs[p].Latest, ofs[p].Current, ofs[p].Oldest,
+			ofs[p].OffsetLag, ofs[p].TimeLag, ofs[p].TimeOldest)
 	}
 }

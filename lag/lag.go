@@ -31,14 +31,15 @@ func (e *lagPartitionError) Error() string {
 }
 
 type OffsetStatus struct {
-	Leader     int32
-	Current    int64
-	Latest     int64
-	Oldest     int64
-	OffsetLag  int64
-	TimeLatest time.Time
-	TimeOldest time.Time
-	TimeLag    time.Duration
+	Leader         int32
+	Replicas       int
+	InSyncReplicas int
+	Current        int64
+	Latest         int64
+	Oldest         int64
+	OffsetLag      int64
+	TimeOldest     time.Duration
+	TimeLag        time.Duration
 }
 
 var nullTime time.Time = time.Time{}
@@ -135,6 +136,19 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 
 	for _, part := range parts {
 		var tlag time.Duration
+		var oldInterval time.Duration
+		var oldTime time.Time
+		var lastTime time.Time
+
+		replicas, err := client.Replicas(topic, part)
+		if err != nil {
+			return nil, &lagPartitionError{topic, group, part, "get-replicas", err}
+		}
+
+		isr, err := client.InSyncReplicas(topic, part)
+		if err != nil {
+			return nil, &lagPartitionError{topic, group, part, "get-replicas", err}
+		}
 
 		leader, err := client.Leader(topic, part)
 		if err != nil {
@@ -148,30 +162,28 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		if err != nil {
 			return nil, &lagPartitionError{topic, group, part, "get-topic-oldest-offset", err}
 		}
-		if old < 1 {
-			old = 0
-		} else {
-			old = old - 1
-		}
-
-		oldTime, err := GetTimestamp(leader, topic, part, old)
-		if err != nil {
-			return nil, &lagPartitionError{topic, group, part, "get-timestamp-topic-offset-oldest", err}
-		}
 
 		last, err := client.GetOffset(topic, part, sarama.OffsetNewest)
 		if err != nil {
 			return nil, &lagPartitionError{topic, group, part, "get-topic-newest-offset", err}
 		}
-		if last < 1 {
-			last = 0
-		} else {
-			last = last - 1
+		last = last - 1
+
+		nbmsg := last - old
+
+		if nbmsg >= 0 {
+			oldTime, err = GetTimestamp(leader, topic, part, old)
+			if err != nil {
+				return nil, &lagPartitionError{topic, group, part, "get-timestamp-topic-offset-oldest", err}
+			}
+			oldInterval = time.Now().Sub(oldTime)
 		}
 
-		lastTime, err := GetTimestamp(leader, topic, part, last)
-		if err != nil {
-			return nil, &lagPartitionError{topic, group, part, "get-timestamp-topic-offset-latest", err}
+		if last >= 0 {
+			lastTime, err = GetTimestamp(leader, topic, part, last)
+			if err != nil {
+				return nil, &lagPartitionError{topic, group, part, "get-timestamp-topic-offset-latest", err}
+			}
 		}
 
 		coordinator, err := client.Coordinator(group)
@@ -186,15 +198,11 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		if err != nil {
 			return nil, &lagPartitionError{topic, group, part, "get-group-offset", err}
 		}
-		if cur < 1 {
-			cur = 0
-		} else {
-			cur = cur - 1
-		}
+		cur = cur - 1
 
 		olag := last - cur
 
-		if olag != 0 {
+		if cur >= 0 {
 			curTime, err := GetTimestamp(leader, topic, part, cur)
 			if err != nil {
 				return nil, &lagPartitionError{topic, group, part, "get-timestamp-group-offset", err}
@@ -208,14 +216,15 @@ func GetLag(brokers string, topic string, group string) (map[int32]OffsetStatus,
 		}
 
 		ofs[part] = OffsetStatus{
-			Leader:     leader.ID(),
-			Current:    cur,
-			Latest:     last,
-			Oldest:     old,
-			TimeLatest: lastTime,
-			TimeOldest: oldTime,
-			OffsetLag:  olag,
-			TimeLag:    tlag,
+			Leader:         leader.ID(),
+			Replicas:       len(replicas),
+			InSyncReplicas: len(isr),
+			Current:        cur,
+			Latest:         last,
+			Oldest:         old,
+			TimeOldest:     oldInterval,
+			OffsetLag:      olag,
+			TimeLag:        tlag,
 		}
 	}
 	return ofs, nil
