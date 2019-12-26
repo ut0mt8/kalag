@@ -1,3 +1,4 @@
+export GO111MODULE=on
 BINARY_NAME=kalag
 
 all: deps fmt test build
